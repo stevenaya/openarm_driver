@@ -8,6 +8,19 @@ TODO
 
 ## Install
 
+`openarm-driver` depends on `openarm-can`. 
+
+```bash
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y ppa:openarm/main
+sudo apt update
+sudo apt install -y \
+  libopenarm-can-dev \
+  openarm-can-utils
+```
+
+Then:
+
 ```bash
 pip install openarm-driver
 ```
