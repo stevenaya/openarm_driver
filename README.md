@@ -25,6 +25,21 @@ Then:
 pip install openarm-driver
 ```
 
+Connect OpenArm, and execute:
+
+For original bimanual openarm v2.0:
+
+```bash
+openarm-can-cli can_configure -d 8000000 --dsp 0.6 --rm 10
+
+```
+
+For cell:
+
+```bash
+openarm-can-cli can_configure
+```
+
 ## Sample usage
 
 ```python
