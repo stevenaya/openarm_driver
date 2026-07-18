@@ -31,6 +31,14 @@ class JointPosChecker(Checker):
 
         """
         self.joint_limits = np.asarray(joint_limits, dtype=float)
+        if (
+            self.joint_limits.ndim != 2
+            or self.joint_limits.shape[1] != 2
+            or not np.all(np.isfinite(self.joint_limits))
+        ):
+            raise ValueError("Joint position limits must be finite [min, max] pairs.")
+        if np.any(self.joint_limits[:, 0] > self.joint_limits[:, 1]):
+            raise ValueError("Joint position minimums must not exceed maximums.")
 
     def check(self, joint_positions: ArrayLike, **kwargs) -> CheckResult:
         """Run check."""
@@ -70,6 +78,12 @@ class JointDeltaPosChecker(Checker):
 
         """
         self.delta_limits = np.asarray(delta_limits, dtype=float)
+        if (
+            self.delta_limits.ndim != 1
+            or not np.all(np.isfinite(self.delta_limits))
+            or np.any(self.delta_limits <= 0.0)
+        ):
+            raise ValueError("Joint delta limits must be finite and positive.")
 
     def check(self, joint_positions: ArrayLike, **kwargs) -> CheckResult:
         """Run check."""
@@ -118,8 +132,12 @@ class JointVelocityChecker(Checker):
 
         """
         self.velocity_limits = np.asarray(velocity_limits, dtype=float)
-        if np.any(self.velocity_limits <= 0.0):
-            raise ValueError("Joint velocity limits must be positive.")
+        if (
+            self.velocity_limits.ndim != 1
+            or not np.all(np.isfinite(self.velocity_limits))
+            or np.any(self.velocity_limits <= 0.0)
+        ):
+            raise ValueError("Joint velocity limits must be finite and positive.")
 
     def check(self, joint_positions: ArrayLike, **kwargs) -> CheckResult:
         """Clamp a command to the motion allowed since the last command."""

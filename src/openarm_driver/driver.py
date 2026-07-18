@@ -33,6 +33,22 @@ from .safety import (
 MAX_COMMAND_DT_S = 0.1
 
 
+def _validate_joint_positions(
+    joint_positions: ArrayLike,
+    expected_shape: tuple[int, ...],
+    *,
+    label: str,
+) -> np.ndarray:
+    positions = np.asarray(joint_positions, dtype=float)
+    if positions.shape != expected_shape:
+        raise ValueError(
+            f"{label} must have shape {expected_shape}, got {positions.shape}."
+        )
+    if not np.all(np.isfinite(positions)):
+        raise ValueError(f"{label} must contain only finite values.")
+    return positions
+
+
 def _create_default_checker(arm_side: str, config: Config) -> CompositeChecker:
     """Create basic checker with joint limits."""
     joint_limits = config.get_joint_limits(arm_side)
@@ -115,6 +131,11 @@ class SingleArmDriver:
         for _ in range(20):
             time.sleep(0.01)
             self.last_command = self.fetch_position(refresh=True)
+        self.last_command = _validate_joint_positions(
+            self.last_command,
+            np.asarray(self.joint_offsets).shape,
+            label="Initial joint positions",
+        )
         self.last_command_time_s = time.monotonic()
 
     def start(self):
@@ -187,6 +208,11 @@ class SingleArmDriver:
 
     def send_position(self, position: ArrayLike):
         """Move the arm by sending the position."""
+        position = _validate_joint_positions(
+            position,
+            self.last_command.shape,
+            label="Joint position command",
+        )
         command_time_s = time.monotonic()
         elapsed_s = max(command_time_s - self.last_command_time_s, 0.0)
         dt_s = min(elapsed_s, MAX_COMMAND_DT_S)
@@ -199,7 +225,11 @@ class SingleArmDriver:
             if checked_result.fixed_joint_positions is not None:
                 position = checked_result.fixed_joint_positions
 
-        target_pos = np.asarray(position, dtype=float)
+        target_pos = _validate_joint_positions(
+            position,
+            self.last_command.shape,
+            label="Checked joint position command",
+        )
         self.last_command = target_pos
         self.last_command_time_s = command_time_s
 
