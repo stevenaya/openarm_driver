@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import pytest
 
+from openarm_driver.base_safety import CheckResult
 from openarm_driver.driver import SingleArmDriver
 
 
@@ -145,3 +147,77 @@ def test_delta_pos_limit(can_mock, config_mock_hard_delta_limit):
     driver = SingleArmDriver("right_arm")
     with pytest.raises(RuntimeError):
         driver.send_position([3.0] * 8)
+
+
+@pytest.mark.parametrize("invalid_value", [np.nan, np.inf, -np.inf])
+def test_send_position_rejects_non_finite_command(can_mock, invalid_value):
+    driver = SingleArmDriver("right_arm")
+    position = driver.last_command.copy()
+    position[0] = invalid_value
+
+    with pytest.raises(ValueError, match="finite"):
+        driver.send_position(position)
+
+
+def test_send_position_rejects_wrong_shape(can_mock):
+    driver = SingleArmDriver("right_arm")
+
+    with pytest.raises(ValueError, match="shape"):
+        driver.send_position(driver.last_command[:-1])
+
+
+@pytest.mark.parametrize(
+    "fixed_position",
+    [
+        np.full(8, np.nan),
+        np.zeros(7),
+    ],
+)
+def test_send_position_validates_checker_correction(can_mock, fixed_position):
+    class InvalidCorrectionChecker:
+        def check(self, joint_positions, **kwargs):
+            return CheckResult(
+                is_safe=False,
+                fixed_joint_positions=fixed_position,
+            )
+
+    driver = SingleArmDriver(
+        "right_arm",
+        safety_checker=InvalidCorrectionChecker(),
+    )
+
+    with pytest.raises(ValueError):
+        driver.send_position(driver.last_command)
+
+
+def test_driver_rejects_non_finite_initial_position(can_mock, monkeypatch):
+    monkeypatch.setattr(
+        MotorStub,
+        "get_position",
+        lambda self: np.nan,
+    )
+
+    with pytest.raises(ValueError, match="Initial joint positions"):
+        SingleArmDriver("right_arm")
+
+
+@pytest.mark.parametrize(
+    ("config_method", "limits"),
+    [
+        ("get_joint_limits", [[-1.0, 1.0]] * 7),
+        ("get_joint_delta_position_limits", [1.0] * 7),
+    ],
+)
+def test_driver_rejects_wrong_number_of_limits(
+    can_mock,
+    monkeypatch,
+    config_method,
+    limits,
+):
+    monkeypatch.setattr(
+        f"openarm_driver.config.Config.{config_method}",
+        lambda self, *args: limits,
+    )
+
+    with pytest.raises(ValueError, match="must have shape"):
+        SingleArmDriver("right_arm")

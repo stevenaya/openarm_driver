@@ -26,13 +26,22 @@ from .base_safety import Checker, CompositeChecker
 from .safety import (
     JointPosChecker,
     JointDeltaPosChecker,
+    _validate_joint_positions,
 )
 
 
-def _create_default_checker(arm_side: str, config: Config) -> CompositeChecker:
+def _create_default_checker(
+    arm_side: str,
+    config: Config,
+    joint_shape: tuple[int, ...],
+) -> CompositeChecker:
     """Create basic checker with joint limits."""
     joint_limits = config.get_joint_limits(arm_side)
     delta_limits = config.get_joint_delta_position_limits()
+    if np.asarray(joint_limits).shape != (*joint_shape, 2):
+        raise ValueError(f"Joint position limits must have shape {(*joint_shape, 2)}.")
+    if np.asarray(delta_limits).shape != joint_shape:
+        raise ValueError(f"Joint delta limits must have shape {joint_shape}.")
     return CompositeChecker(
         [
             JointPosChecker(joint_limits),
@@ -100,7 +109,7 @@ class SingleArmDriver:
 
         # If no checker provided, create basic joint limit checker only
         self.safety_checker = (
-            _create_default_checker(arm_side, self.config)
+            _create_default_checker(arm_side, self.config, self.joint_offsets.shape)
             if safety_checker is None
             else safety_checker
         )
@@ -109,6 +118,11 @@ class SingleArmDriver:
         for _ in range(20):
             time.sleep(0.01)
             self.last_command = self.fetch_position(refresh=True)
+        self.last_command = _validate_joint_positions(
+            self.last_command,
+            self.joint_offsets.shape,
+            label="Initial joint positions",
+        )
 
     def start(self):
         """Start the arm."""
@@ -180,6 +194,11 @@ class SingleArmDriver:
 
     def send_position(self, position: ArrayLike):
         """Move the arm by sending the position."""
+        position = _validate_joint_positions(
+            position,
+            self.last_command.shape,
+            label="Joint position command",
+        )
         checked_result = self.safety_checker.check(position, driver=self)
         if not checked_result.is_safe:
             if checked_result.force_stop:
@@ -187,7 +206,11 @@ class SingleArmDriver:
             if checked_result.fixed_joint_positions is not None:
                 position = checked_result.fixed_joint_positions
 
-        target_pos = np.asarray(position, dtype=float)
+        target_pos = _validate_joint_positions(
+            position,
+            self.last_command.shape,
+            label="Checked joint position command",
+        )
         self.last_command = target_pos
 
         self.openarm.get_arm().mit_control_all(

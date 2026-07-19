@@ -20,6 +20,22 @@ from numpy.typing import ArrayLike
 from .base_safety import Checker, CheckResult
 
 
+def _validate_joint_positions(
+    joint_positions: ArrayLike,
+    expected_shape: tuple[int, ...],
+    *,
+    label: str,
+) -> np.ndarray:
+    positions = np.asarray(joint_positions, dtype=float)
+    if positions.shape != expected_shape:
+        raise ValueError(
+            f"{label} must have shape {expected_shape}, got {positions.shape}."
+        )
+    if not np.all(np.isfinite(positions)):
+        raise ValueError(f"{label} must contain only finite values.")
+    return positions
+
+
 class JointPosChecker(Checker):
     """Check that joint positions are within limits."""
 
@@ -31,10 +47,23 @@ class JointPosChecker(Checker):
 
         """
         self.joint_limits = np.asarray(joint_limits, dtype=float)
+        if (
+            self.joint_limits.ndim != 2
+            or self.joint_limits.shape[1] != 2
+            or not np.all(np.isfinite(self.joint_limits))
+        ):
+            raise ValueError("Joint position limits must be finite [min, max] pairs.")
+        if np.any(self.joint_limits[:, 0] > self.joint_limits[:, 1]):
+            raise ValueError("Joint position minimums must not exceed maximums.")
 
     def check(self, joint_positions: ArrayLike, **kwargs) -> CheckResult:
         """Run check."""
-        positions = np.asarray(joint_positions, dtype=float)
+        expected_shape = (self.joint_limits.shape[0],)
+        positions = _validate_joint_positions(
+            joint_positions,
+            expected_shape,
+            label="Joint positions",
+        )
         low = self.joint_limits[:, 0]
         high = self.joint_limits[:, 1]
 
@@ -70,9 +99,21 @@ class JointDeltaPosChecker(Checker):
 
         """
         self.delta_limits = np.asarray(delta_limits, dtype=float)
+        if (
+            self.delta_limits.ndim != 1
+            or not np.all(np.isfinite(self.delta_limits))
+            or np.any(self.delta_limits <= 0.0)
+        ):
+            raise ValueError("Joint delta limits must be finite and positive.")
 
     def check(self, joint_positions: ArrayLike, **kwargs) -> CheckResult:
         """Run check."""
+        positions = _validate_joint_positions(
+            joint_positions,
+            self.delta_limits.shape,
+            label="Joint positions",
+        )
+
         driver = kwargs.get("driver")
         if driver is None or not hasattr(driver, "last_command"):
             return CheckResult(
@@ -81,8 +122,13 @@ class JointDeltaPosChecker(Checker):
                 check_type="joint_delta",
             )
 
-        positions = np.asarray(joint_positions, dtype=float)
-        delta = positions - driver.last_command
+        previous = _validate_joint_positions(
+            driver.last_command,
+            self.delta_limits.shape,
+            label="Previous joint positions",
+        )
+
+        delta = positions - previous
 
         for i, d in enumerate(delta):
             if abs(d) > self.delta_limits[i]:
