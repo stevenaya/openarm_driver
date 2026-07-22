@@ -115,6 +115,7 @@ class SingleArmDriver:
         for _ in range(20):
             time.sleep(0.01)
             self.last_command = self.fetch_position(refresh=True)
+        self.last_command_velocity = np.zeros_like(self.last_command, dtype=float)
         self.last_command_time_s = time.monotonic()
 
     def start(self):
@@ -190,6 +191,7 @@ class SingleArmDriver:
         command_time_s = time.monotonic()
         elapsed_s = max(command_time_s - self.last_command_time_s, 0.0)
         dt_s = min(elapsed_s, MAX_COMMAND_DT_S)
+        previous_command = np.asarray(self.last_command, dtype=float)
         checked_result = self.safety_checker.check(
             position,
             driver=self,
@@ -202,7 +204,13 @@ class SingleArmDriver:
                 position = checked_result.fixed_joint_positions
 
         target_pos = np.asarray(position, dtype=float)
+        target_velocity = (
+            (target_pos - previous_command) / dt_s
+            if dt_s > 0.0
+            else np.zeros_like(target_pos)
+        )
         self.last_command = target_pos
+        self.last_command_velocity = target_velocity
         self.last_command_time_s = command_time_s
 
         self.openarm.get_arm().mit_control_all(
@@ -211,7 +219,7 @@ class SingleArmDriver:
                     self.kps[i],
                     self.kds[i],
                     target_pos[i] + self.joint_offsets[i],
-                    0,
+                    target_velocity[i],
                     0,
                 )
                 for i in range(self.num_mit_motors)

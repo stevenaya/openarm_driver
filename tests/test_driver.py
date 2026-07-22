@@ -50,6 +50,7 @@ class MotorStub:
 class CanMock:
     def __init__(self, *args, **kwargs):
         self.motors = []
+        self.last_mit_params = []
 
     def __getattr__(self, name):
         return self
@@ -64,7 +65,8 @@ class CanMock:
         return self.motors
 
     def mit_control_all(self, mit_params):
-        for motor, mit_param in zip(self.motors, mit_params):
+        self.last_mit_params = list(mit_params)
+        for motor, mit_param in zip(self.motors, self.last_mit_params):
             motor.position = mit_param.q
 
 
@@ -132,6 +134,39 @@ def test_fetch_state(can_mock):
 def test_send_position(can_mock):
     driver = SingleArmDriver("right_arm")
     driver.send_position(driver.last_command)
+
+
+def test_send_position_uses_velocity_of_safety_checked_target(can_mock, monkeypatch):
+    command_times = iter([1.0, 1.05])
+    monkeypatch.setattr(
+        "openarm_driver.driver.time.monotonic",
+        lambda: next(command_times),
+    )
+
+    class ClippingChecker:
+        def check(self, joint_positions, **kwargs):
+            previous = np.asarray(kwargs["driver"].last_command)
+            accepted_velocity = np.linspace(0.1, 0.8, 8)
+            return CheckResult(
+                is_safe=False,
+                fixed_joint_positions=previous + accepted_velocity * kwargs["dt_s"],
+            )
+
+    driver = SingleArmDriver("right_arm", safety_checker=ClippingChecker())
+    previous = driver.last_command.copy()
+    driver.send_position(previous + 1.0)
+
+    expected_velocity = np.linspace(0.1, 0.8, 8)
+    np.testing.assert_allclose(driver.last_command_velocity, expected_velocity)
+    np.testing.assert_allclose(
+        [param.dq for param in driver.openarm.last_mit_params],
+        expected_velocity[: driver.num_mit_motors],
+    )
+    np.testing.assert_allclose(
+        [param.q for param in driver.openarm.last_mit_params],
+        driver.last_command[: driver.num_mit_motors]
+        + driver.joint_offsets[: driver.num_mit_motors],
+    )
 
 
 def test_smooth_move(can_mock):
