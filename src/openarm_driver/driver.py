@@ -14,6 +14,7 @@
 
 """Driver for OpenArm."""
 
+import logging
 import time
 from collections.abc import Iterator
 
@@ -30,7 +31,10 @@ from .safety import (
 )
 
 
-MAX_COMMAND_DT_S = 0.1
+MAX_COMMAND_DT_S = 0.02
+SAFETY_STOP_WARNING_INTERVAL_S = 2.0
+
+logger = logging.getLogger(__name__)
 
 
 def _create_default_checker(arm_side: str, config: Config) -> CompositeChecker:
@@ -75,6 +79,8 @@ class SingleArmDriver:
         self.openarm = oa.OpenArm(self.can_interface, True)
         self.latest_state = None
         self.started = False
+        self._safety_stop_reason: str | None = None
+        self._last_safety_warning_time_s: float | None = None
 
         # Load joint offsets from config
         self.joint_offsets = self.config.get_joint_offsets(self.arm_side)
@@ -119,17 +125,22 @@ class SingleArmDriver:
 
     def start(self):
         """Start the arm."""
+        self._safety_stop_reason = None
+        self._last_safety_warning_time_s = None
         self.openarm.set_callback_mode_all(oa.CallbackMode.STATE)
         self.openarm.enable_all()
         self.set_latest_state(timeout_us=500)
         self.openarm.refresh_all()
         self.set_latest_state(timeout_us=500)
+        self.last_command = self.latest_state["qpos"].copy()
+        self.last_command_time_s = time.monotonic()
         self._on_start()
         self.started = True
 
     def stop(self):
         """Stop the arm."""
-        self._on_stop()
+        if self._safety_stop_reason is None:
+            self._on_stop()
         self.openarm.disable_all()
         self.set_latest_state(timeout_us=1000)
         time.sleep(1)
@@ -188,6 +199,10 @@ class SingleArmDriver:
     def send_position(self, position: ArrayLike):
         """Move the arm by sending the position."""
         command_time_s = time.monotonic()
+        if self._safety_stop_reason is not None:
+            self._warn_safety_stop(command_time_s)
+            return
+
         elapsed_s = max(command_time_s - self.last_command_time_s, 0.0)
         dt_s = min(elapsed_s, MAX_COMMAND_DT_S)
         checked_result = self.safety_checker.check(
@@ -197,7 +212,9 @@ class SingleArmDriver:
         )
         if not checked_result.is_safe:
             if checked_result.force_stop:
-                raise RuntimeError(checked_result.message)
+                self._safety_stop_reason = checked_result.message
+                self._warn_safety_stop(command_time_s)
+                return
             if checked_result.fixed_joint_positions is not None:
                 position = checked_result.fixed_joint_positions
 
@@ -226,6 +243,18 @@ class SingleArmDriver:
             )
 
         self.set_latest_state(timeout_us=300)
+
+    def _warn_safety_stop(self, command_time_s: float):
+        last_warning = self._last_safety_warning_time_s
+        if (
+            last_warning is None
+            or command_time_s - last_warning >= SAFETY_STOP_WARNING_INTERVAL_S
+        ):
+            logger.warning(
+                "Safety stop: %s; ignoring position commands until stop/start",
+                self._safety_stop_reason,
+            )
+            self._last_safety_warning_time_s = command_time_s
 
     def smooth_move(
         self,
